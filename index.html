@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>스마트 명함 스캐너</title>
+    
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Tesseract.js for Optical Character Recognition (OCR) -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+    <!-- Font Awesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        /* Custom Styles to supplement Tailwind */
+        body {
+            font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+            -webkit-tap-highlight-color: transparent;
+        }
+        
+        /* Loading Overlay */
+        #loading-overlay {
+            backdrop-filter: blur(5px);
+            transition: opacity 0.3s ease-in-out;
+        }
+        
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top: 4px solid white;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Hide file input element */
+        #camera-input {
+            display: none;
+        }
+        
+        /* Subtle shadows and transitions */
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+        }
+
+        .btn-press:active {
+            transform: scale(0.98);
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen text-gray-800 antialiased flex flex-col">
+
+    <!-- Header -->
+    <header class="bg-blue-600 text-white p-4 shadow-md sticky top-0 z-10">
+        <h1 class="text-xl font-bold text-center flex items-center justify-center gap-2">
+            <i class="fa-solid fa-id-card"></i> 스마트 명함 스캐너
+        </h1>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="flex-grow flex flex-col items-center p-4 max-w-md mx-auto w-full relative">
+        
+        <!-- Welcome / Instructions Section -->
+        <div id="intro-section" class="w-full text-center mt-8 mb-6 transition-opacity duration-300">
+            <div class="bg-blue-100 text-blue-800 p-4 rounded-2xl mb-6 shadow-inner">
+                <i class="fa-solid fa-camera text-4xl mb-3 text-blue-500"></i>
+                <h2 class="text-lg font-semibold mb-2">명함을 스캔하세요</h2>
+                <p class="text-sm">버튼을 눌러 명함을 촬영하면 이름과 전화번호를 자동으로 인식합니다.</p>
+            </div>
+        </div>
+
+        <!-- Image Preview Section (Hidden initially) -->
+        <div id="preview-section" class="w-full hidden flex-col items-center mb-6">
+            <div class="relative w-full aspect-[16/9] bg-gray-200 rounded-xl overflow-hidden shadow-md border-2 border-gray-300 mb-2">
+                <img id="image-preview" src="" alt="Captured Business Card" class="w-full h-full object-contain bg-white">
+                <button id="retake-btn" class="absolute top-2 right-2 bg-gray-800 bg-opacity-70 text-white p-2 rounded-full hover:bg-opacity-90 transition btn-press">
+                    <i class="fa-solid fa-rotate-right"></i> 다시 찍기
+                </button>
+            </div>
+            <p class="text-xs text-gray-500">인식률을 높이려면 밝은 곳에서 흔들림 없이 촬영하세요.</p>
+        </div>
+
+        <!-- Extracted Data Form (Hidden initially) -->
+        <div id="data-section" class="w-full hidden glass-panel rounded-2xl p-5 mb-24 w-full">
+            <h3 class="text-md font-bold mb-4 border-b pb-2 flex items-center gap-2">
+                <i class="fa-solid fa-user-check text-blue-500"></i> 인식 결과 확인
+            </h3>
+            
+            <div class="space-y-4">
+                <div>
+                    <label for="name-input" class="block text-sm font-medium text-gray-700 mb-1">이름</label>
+                    <div class="relative">
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <i class="fa-regular fa-user text-gray-400"></i>
+                        </div>
+                        <input type="text" id="name-input" class="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white" placeholder="이름을 입력/수정하세요">
+                    </div>
+                </div>
+                
+                <div>
+                    <label for="phone-input" class="block text-sm font-medium text-gray-700 mb-1">휴대폰 번호</label>
+                    <div class="relative">
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <i class="fa-solid fa-mobile-screen-button text-gray-400"></i>
+                        </div>
+                        <input type="tel" id="phone-input" class="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white" placeholder="전화번호를 입력/수정하세요">
+                    </div>
+                    <p id="phone-warning" class="text-xs text-red-500 mt-1 hidden">올바른 전화번호 형식이 아닙니다.</p>
+                </div>
+            </div>
+            
+            <!-- Raw OCR Text Toggle (For debugging/manual check) -->
+            <div class="mt-4">
+                <button id="toggle-raw-text" class="text-xs text-blue-600 hover:underline flex items-center gap-1">
+                    <i class="fa-solid fa-chevron-down text-[10px] transition-transform" id="raw-text-icon"></i> 인식된 원본 텍스트 보기
+                </button>
+                <div id="raw-text-container" class="hidden mt-2 p-3 bg-gray-50 border rounded text-xs text-gray-600 h-32 overflow-y-auto whitespace-pre-wrap"></div>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Bottom Action Bar (Fixed) -->
+    <div class="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 p-4 pb-safe flex justify-center shadow-[0_-5px_15px_-5px_rgba(0,0,0,0.1)] z-10">
+        <div class="max-w-md w-full flex gap-3">
+            <!-- Camera Button (Primary action initially) -->
+            <label for="camera-input" id="scan-action-btn" class="flex-1 bg-blue-600 text-white text-center py-4 rounded-xl font-bold text-lg shadow-lg shadow-blue-200 cursor-pointer hover:bg-blue-700 transition btn-press flex items-center justify-center gap-2">
+                <i class="fa-solid fa-camera-retro"></i> 명함 촬영하기
+            </label>
+            <!-- Hidden file input for camera access -->
+            <input type="file" accept="image/*" capture="camera" id="camera-input">
+            
+            <!-- Save and Call Buttons (Hidden initially) -->
+            <button id="save-btn" class="hidden flex-1 bg-gray-200 text-gray-800 py-4 rounded-xl font-bold text-base hover:bg-gray-300 transition btn-press flex items-center justify-center gap-2">
+                <i class="fa-solid fa-address-book"></i> 연락처 저장
+            </button>
+            <button id="call-btn" class="hidden flex-1 bg-green-500 text-white py-4 rounded-xl font-bold text-base shadow-lg shadow-green-200 hover:bg-green-600 transition btn-press flex items-center justify-center gap-2">
+                <i class="fa-solid fa-phone"></i> 바로 전화걸기
+            </button>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-70 z-50 hidden flex-col items-center justify-center">
+        <div class="spinner mb-4"></div>
+        <p id="loading-text" class="text-white font-medium text-lg">이미지 처리 중...</p>
+        <p class="text-gray-300 text-sm mt-2">잠시만 기다려주세요</p>
+    </div>
+    
+    <!-- Custom Alert Modal -->
+    <div id="alert-modal" class="fixed inset-0 bg-black bg-opacity-50 z-50 hidden items-center justify-center p-4">
+        <div class="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl transform scale-95 opacity-0 transition-all duration-300" id="alert-content">
+            <div class="text-center">
+                <div id="alert-icon" class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-blue-100 mb-4">
+                    <i class="fa-solid fa-info text-blue-600 text-xl"></i>
+                </div>
+                <h3 class="text-lg leading-6 font-bold text-gray-900 mb-2" id="alert-title">알림</h3>
+                <div class="mt-2">
+                    <p class="text-sm text-gray-500" id="alert-message">메시지 내용</p>
+                </div>
+            </div>
+            <div class="mt-5 sm:mt-6">
+                <button type="button" id="alert-close" class="inline-flex justify-center w-full rounded-xl border border-transparent shadow-sm px-4 py-3 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none sm:text-sm btn-press">
+                    확인
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript Logic -->
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // DOM Elements
+            const cameraInput = document.getElementById('camera-input');
+            const introSection = document.getElementById('intro-section');
+            const previewSection = document.getElementById('preview-section');
+            const imagePreview = document.getElementById('image-preview');
+            const retakeBtn = document.getElementById('retake-btn');
+            const dataSection = document.getElementById('data-section');
+            const nameInput = document.getElementById('name-input');
+            const phoneInput = document.getElementById('phone-input');
+            const phoneWarning = document.getElementById('phone-warning');
+            const scanActionBtn = document.getElementById('scan-action-btn');
+            const saveBtn = document.getElementById('save-btn');
+            const callBtn = document.getElementById('call-btn');
+            
+            const loadingOverlay = document.getElementById('loading-overlay');
+            const loadingText = document.getElementById('loading-text');
+            
+            const toggleRawTextBtn = document.getElementById('toggle-raw-text');
+            const rawTextContainer = document.getElementById('raw-text-container');
+            const rawTextIcon = document.getElementById('raw-text-icon');
+            
+            // State
+            let currentImageFile = null;
+
+            // Initialize Tesseract worker early
+            let tesseractWorker = null;
+            
+            // 엔진 준비 상태를 시각적으로 보여주기 위한 UI 처리 추가
+            cameraInput.disabled = true;
+            scanActionBtn.classList.remove('bg-blue-600', 'hover:bg-blue-700', 'cursor-pointer');
+            scanActionBtn.classList.add('bg-gray-400', 'cursor-not-allowed');
+            scanActionBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 엔진 준비 중... (최초 1회)';
+
+            async function initTesseract() {
+                try {
+                    // Fix for DataCloneError: Removed the logger parameter
+                    // Web Worker communication in v5 can sometimes fail when trying to pass certain objects back and forth
+                    tesseractWorker = await Tesseract.createWorker('kor+eng');
+                    
+                    console.log('Tesseract Worker Initialized');
+
+                    // 준비 완료: 버튼 활성화
+                    cameraInput.disabled = false;
+                    scanActionBtn.classList.remove('bg-gray-400', 'cursor-not-allowed');
+                    scanActionBtn.classList.add('bg-blue-600', 'hover:bg-blue-700', 'cursor-pointer');
+                    scanActionBtn.innerHTML = '<i class="fa-solid fa-camera-retro"></i> 명함 촬영하기';
+                    
+                } catch (error) {
+                    console.error("Tesseract initialization failed:", error);
+                    showAlert("초기화 오류", "인식 엔진을 불러오는데 실패했습니다. 인터넷 연결을 확인하거나 웹 호스팅 환경(HTTPS)에서 실행해주세요.", "error");
+                    scanActionBtn.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> 엔진 로드 실패';
+                }
+            }
+
+            // Start init process in background
+            initTesseract();
+
+            // --- Event Listeners ---
+
+            // Handle file selection from camera/gallery
+            cameraInput.addEventListener('change', handleFileSelection);
+
+            // Retake button logic
+            retakeBtn.addEventListener('click', () => {
+                resetUI();
+                cameraInput.click();
+            });
+
+            // Toggle raw text visibility
+            toggleRawTextBtn.addEventListener('click', () => {
+                rawTextContainer.classList.toggle('hidden');
+                rawTextIcon.classList.toggle('rotate-180');
+            });
+
+            // Phone input validation on type
+            phoneInput.addEventListener('input', (e) => {
+                // Remove non-numeric characters except dash
+                let val = e.target.value.replace(/[^0-9-]/g, '');
+                e.target.value = val;
+                
+                // Simple validation check
+                const phoneRegex = /^(01[016789]{1}|02|0[3-9]{1}[0-9]{1})-?[0-9]{3,4}-?[0-9]{4}$/;
+                if (val.length > 0 && !phoneRegex.test(val.replace(/-/g, ''))) {
+                    phoneWarning.classList.remove('hidden');
+                } else {
+                    phoneWarning.classList.add('hidden');
+                }
+            });
+
+            // Save Contact Button
+            saveBtn.addEventListener('click', generateVCard);
+
+            // Call Button
+            callBtn.addEventListener('click', makeCall);
+
+            // --- Core Functions ---
+            
+            function handleFileSelection(event) {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                currentImageFile = file;
+                
+                // Display preview
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    imagePreview.src = e.target.result;
+                    showPreviewUI();
+                    processImage(file);
+                };
+                reader.readAsDataURL(file);
+            }
+
+            async function processImage(file) {
+                if (!tesseractWorker) {
+                    showAlert("로딩 중", "아직 인식 엔진이 준비되지 않았습니다. 잠시 후 다시 시도해주세요.", "info");
+                    return;
+                }
+
+                showLoading(true, "이미지 준비 중...");
+                
+                try {
+                    // Start OCR process
+                    const { data: { text } } = await tesseractWorker.recognize(file);
+                    
+                    showLoading(false);
+                    rawTextContainer.textContent = text;
+                    extractInfo(text);
+                    
+                } catch (error) {
+                    console.error("OCR Error:", error);
+                    showLoading(false);
+                    showAlert("인식 실패", "이미지에서 텍스트를 인식하는데 실패했습니다. 다시 촬영해주세요.", "error");
+                    // Still show UI so they can manually enter
+                    showDataUI();
+                }
+            }
+            
+            function extractInfo(text) {
+                // Remove special chars that might confuse regex but keep spaces, dashes, dots
+                let cleanText = text.replace(/[^\w\s가-힣-.]/gi, ' ');
+                
+                let extractedPhone = "";
+                let extractedName = "";
+
+                // 1. Extract Phone Number
+                // Korean Mobile formats: 010-1234-5678, 01012345678, 010.1234.5678, +82 10...
+                // Also general phone numbers: 02-123-4567
+                const phoneRegexes = [
+                    /(?:010|011|016|017|018|019)[\s.-]?\d{3,4}[\s.-]?\d{4}/g, // Mobile
+                    /0[2-9][0-9]?[\s.-]?\d{3,4}[\s.-]?\d{4}/g // General landline
+                ];
+
+                for (let regex of phoneRegexes) {
+                    const matches = text.match(regex);
+                    if (matches && matches.length > 0) {
+                        // Prefer mobile numbers (starts with 01)
+                        const mobileMatch = matches.find(m => m.startsWith('01'));
+                        extractedPhone = mobileMatch ? mobileMatch : matches[0];
+                        // Clean phone number (keep only digits)
+                        extractedPhone = extractedPhone.replace(/[^0-9]/g, '');
+                        // Format it nicely
+                        if(extractedPhone.length === 11) {
+                            extractedPhone = extractedPhone.replace(/(\d{3})(\d{4})(\d{4})/, '$1-$2-$3');
+                        } else if(extractedPhone.length === 10) {
+                             if(extractedPhone.startsWith('02')) {
+                                 extractedPhone = extractedPhone.replace(/(\d{2})(\d{4})(\d{4})/, '$1-$2-$3');
+                             } else {
+                                 extractedPhone = extractedPhone.replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3');
+                             }
+                        }
+                        break; // Stop if we found a good number
+                    }
+                }
+
+                // 2. Extract Name (Heuristics approach for Korean names)
+                // This is very basic and often fails on business cards due to varied layouts.
+                // We look for 2-4 Hangul characters separated by spaces or at start of lines.
+                // We try to exclude common titles/positions (사장, 대표, 대리, 과장, 팀장 등)
+                
+                const positionKeywords = ['대표', '사장', '이사', '상무', '전무', '부장', '차장', '과장', '대리', '주임', '사원', '팀장', '실장', '본부장', '매니저', '선임', '책임', '수석', 'CEO', '회장', '원장'];
+                const lines = cleanText.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+                
+                for (let line of lines) {
+                    // Try to find a sequence of 2-4 Hangul chars
+                    // Often names are followed by positions (e.g. "홍길동 과장") or stand alone
+                    
+                    // Split line into words
+                    const words = line.split(/\s+/);
+                    
+                    for(let i=0; i<words.length; i++) {
+                        let word = words[i];
+                        // Check if word is 2-4 Hangul characters
+                        if (/^[가-힣]{2,4}$/.test(word)) {
+                            // Check if it's NOT a position keyword
+                            let isPosition = false;
+                            for(let pos of positionKeywords) {
+                                if(word.includes(pos)) { isPosition = true; break;}
+                            }
+                            
+                            if(!isPosition) {
+                                // High probability this is a name.
+                                // Especially if the *next* word is a position, or if it's alone on a line.
+                                extractedName = word;
+                                // We stop at the first good candidate, though might be wrong.
+                                break;
+                            }
+                        }
+                    }
+                    if(extractedName) break;
+                }
+
+                // Update UI with extracted data
+                nameInput.value = extractedName;
+                phoneInput.value = extractedPhone;
+                
+                showDataUI();
+                
+                if(!extractedPhone) {
+                    showAlert("안내", "전화번호를 명확히 찾지 못했습니다. 직접 입력해주세요.", "info");
+                }
+            }
+
+            function generateVCard() {
+                const name = nameInput.value.trim();
+                const phone = phoneInput.value.trim().replace(/[^0-9+]/g, '');
+
+                if (!name || !phone) {
+                    showAlert("입력 오류", "이름과 전화번호를 모두 입력해주세요.", "error");
+                    return;
+                }
+
+                // Create vCard string
+                const vcard = `BEGIN:VCARD
+VERSION:3.0
+FN:${name}
+N:;${name};;;
+TEL;TYPE=CELL:${phone}
+END:VCARD`;
+
+                // Create a Blob and trigger download
+                const blob = new Blob([vcard], { type: 'text/vcard;charset=utf-8' });
+                const url = URL.createObjectURL(blob);
+                
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = url;
+                // Filename
+                a.download = `${name}_명함.vcf`;
+                document.body.appendChild(a);
+                
+                // In many mobile browsers, clicking a .vcf file triggers the OS contact save dialog
+                a.click();
+                
+                setTimeout(() => {
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                    showAlert("저장 시도", "연락처 저장 화면이 열리지 않으면 브라우저 설정에 따라 직접 다운로드된 파일을 실행해야 할 수 있습니다.", "success");
+                }, 100);
+            }
+
+            function makeCall() {
+                const phone = phoneInput.value.trim().replace(/[^0-9+]/g, '');
+                
+                if (!phone) {
+                    showAlert("입력 오류", "전화번호를 입력해주세요.", "error");
+                    return;
+                }
+                
+                // Use tel: protocol to initiate call
+                window.location.href = `tel:${phone}`;
+            }
+
+            // --- UI Helper Functions ---
+            
+            function showPreviewUI() {
+                introSection.classList.add('hidden');
+                previewSection.classList.remove('hidden');
+                previewSection.classList.add('flex');
+            }
+
+            function showDataUI() {
+                dataSection.classList.remove('hidden');
+                
+                // Hide main scan button, show save/call buttons
+                scanActionBtn.classList.add('hidden');
+                saveBtn.classList.remove('hidden');
+                callBtn.classList.remove('hidden');
+                
+                // Highlight input if empty
+                if(!nameInput.value) {
+                    nameInput.classList.add('ring-2', 'ring-red-400');
+                    setTimeout(() => nameInput.classList.remove('ring-2', 'ring-red-400'), 2000);
+                }
+            }
+
+            function resetUI() {
+                // Reset inputs
+                nameInput.value = '';
+                phoneInput.value = '';
+                phoneWarning.classList.add('hidden');
+                rawTextContainer.textContent = '';
+                rawTextContainer.classList.add('hidden');
+                rawTextIcon.classList.remove('rotate-180');
+                
+                // Reset views
+                introSection.classList.remove('hidden');
+                previewSection.classList.add('hidden');
+                previewSection.classList.remove('flex');
+                dataSection.classList.add('hidden');
+                
+                // Reset buttons
+                scanActionBtn.classList.remove('hidden');
+                saveBtn.classList.add('hidden');
+                callBtn.classList.add('hidden');
+                
+                // Clear file input
+                cameraInput.value = '';
+                currentImageFile = null;
+            }
+
+            function showLoading(show, text = '처리 중...') {
+                if (show) {
+                    loadingText.textContent = text;
+                    loadingOverlay.classList.remove('hidden');
+                    loadingOverlay.classList.add('flex');
+                } else {
+                    loadingOverlay.classList.add('hidden');
+                    loadingOverlay.classList.remove('flex');
+                }
+            }
+
+            // Custom Alert UI
+            const alertModal = document.getElementById('alert-modal');
+            const alertContent = document.getElementById('alert-content');
+            const alertTitle = document.getElementById('alert-title');
+            const alertMessage = document.getElementById('alert-message');
+            const alertIcon = document.getElementById('alert-icon');
+            const alertCloseBtn = document.getElementById('alert-close');
+
+            function showAlert(title, message, type = 'info') {
+                alertTitle.textContent = title;
+                alertMessage.textContent = message;
+
+                // Style based on type
+                alertIcon.className = 'mx-auto flex items-center justify-center h-12 w-12 rounded-full mb-4';
+                let iconHtml = '';
+                
+                if (type === 'error') {
+                    alertIcon.classList.add('bg-red-100');
+                    iconHtml = '<i class="fa-solid fa-triangle-exclamation text-red-600 text-xl"></i>';
+                } else if (type === 'success') {
+                    alertIcon.classList.add('bg-green-100');
+                    iconHtml = '<i class="fa-solid fa-check text-green-600 text-xl"></i>';
+                } else {
+                    alertIcon.classList.add('bg-blue-100');
+                    iconHtml = '<i class="fa-solid fa-info text-blue-600 text-xl"></i>';
+                }
+                alertIcon.innerHTML = iconHtml;
+
+                alertModal.classList.remove('hidden');
+                alertModal.classList.add('flex');
+                
+                // Trigger animation
+                setTimeout(() => {
+                    alertContent.classList.remove('scale-95', 'opacity-0');
+                    alertContent.classList.add('scale-100', 'opacity-100');
+                }, 10);
+            }
+
+            alertCloseBtn.addEventListener('click', () => {
+                alertContent.classList.remove('scale-100', 'opacity-100');
+                alertContent.classList.add('scale-95', 'opacity-0');
+                
+                setTimeout(() => {
+                    alertModal.classList.add('hidden');
+                    alertModal.classList.remove('flex');
+                }, 300);
+            });
+        });
+    </script>
+</body>
+</html>
